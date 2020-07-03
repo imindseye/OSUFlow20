@@ -1,0 +1,31 @@
+{
+    "files.associations": {
+        "Field.C": "cpp",
+        "Solution.C": "cpp",
+        "Interpolator.C": "cpp",
+        "CurvilinearGrid.C": "cpp",
+        "Candidate.C": "cpp",
+        "ComputeFieldLines.C": "cpp",
+        "eigenvals.C": "cpp",
+        "eigenvecs.C": "cpp",
+        "Element.C": "cpp",
+        "FieldLine.C": "cpp",
+        "FlashAMR.C": "cpp",
+        "FileReader.C": "cpp",
+        "PathLine.C": "cpp",
+        "Trace.C": "cpp",
+        "flashhdf5_float.C": "cpp",
+        "Grid.C": "cpp",
+        "IsoSurf.C": "cpp",
+        "Lattice4D.C": "cpp",
+        "Partition.C": "cpp",
+        "Lattice.C": "cpp",
+        "make_vectorData.C": "cpp",
+        "polynomials.C": "cpp",
+        "Repartition.C": "cpp",
+        "StreakLine.C": "cpp",
+        "OSUFlow.C": "cpp",
+        "calc_subvolume.C": "cpp",
+        "Streamline.C": "cpp"
+    }
+}

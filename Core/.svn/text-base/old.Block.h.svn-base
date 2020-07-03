@@ -1,0 +1,78 @@
+//------------------------------------------------------------------------------
+//
+// block header
+// initializes, seeds, loads and unloads data blocks
+//
+// Copyright (c) 2009 Han-Wei Shen and Tom Peterka
+//
+// Contact:
+//
+// Han-Wei Shen
+// The Ohio State University
+// Columbus, OH
+//
+// Tom Peterka
+// MCS Radix Lab
+// Argonne National Laboratory
+// 9700 S. Cass Ave.
+// Argonne, IL 60439
+// tpeterka@mcs.anl.gov
+//
+// All rights reserved. May not be used, modified, or copied
+// without permission
+//
+//--------------------------------------------------------------------------
+
+#ifndef _BLOCK_H_
+#define _BLOCK_H_
+
+#include <stdio.h>
+#include <stdlib.h> 
+#include <list>
+#include <iterator>
+#include "OSUFlow.h"
+#include "Lattice4D.h"
+#include "LatticeAMR.h"
+
+#ifdef _MPI
+#include "iol.h"
+#endif
+
+class Block {
+
+ public:
+
+  Block(Lattice4D *lat, OSUFlow **osuflow, int ghost, char *filename, 
+	DataMode data_mode, char **dataset_files, int track_seed_id = 0);
+  Block(LatticeAMR *lat, OSUFlow **osuflow, char *filename, DataMode data_mode,
+	char **dataset_files, int track_seed_id = 0);
+  ~Block();
+  float ***IolLoadTimeGroupBlocks4D(int t_group);
+  void DeleteBlocks4D(int grp);
+  void DeleteBlocksAMR(int grp);
+  int LoadBlocks4D(int grp, double *time, float **data = NULL);
+  int LoadBlock4D(int grp, int blk, double *time, float **data = NULL);
+  int LoadBlocksAMR(int grp, double *time);
+  void InitBlocks4D(VECTOR4 **Seeds, int *NumSeeds, int *SizeSeeds, 
+		    VECTOR3 *seeds, int tf, int64_t **SeedIds = NULL);
+  void InitBlocksAMR(VECTOR4 **Seeds, int *NumSeeds, int *SizeSeeds, 
+		     VECTOR3 *seeds, int tf, int64_t **SeedIds = NULL);
+
+ private:
+
+  int IsBlockInTimeGroup4D(int grp, int blk);
+  int IsBlockInTimeGroupAMR(int grp, int blk);
+
+  Lattice4D *lat4D;
+  LatticeAMR *latAMR;
+  OSUFlow ** osuflow;
+  int ghost;
+  char filename[256];
+  DataMode data_mode;
+  char **dataset_files;
+  int track_seed_id;
+  
+};
+
+#endif
+

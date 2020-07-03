@@ -1,0 +1,508 @@
+//------------------------------------------------------------------------------
+//
+// block class
+// initializes, seeds, loads and unloads data blocks
+//
+// Copyright (c) 2009 Han-Wei Shen and Tom Peterka
+//
+// Contact:
+//
+// Han-Wei Shen
+// The Ohio State University
+// Columbus, OH
+//
+// Tom Peterka
+// MCS Radix Lab
+// Argonne National Laboratory
+// 9700 S. Cass Ave.
+// Argonne, IL 60439
+// tpeterka@mcs.anl.gov
+//
+// All rights reserved. May not be used, modified, or copied
+// without permission
+//
+//--------------------------------------------------------------------------
+
+#ifdef _MPI
+#include <mpi.h>
+#endif
+
+#include <stdio.h>
+#include <stdlib.h> 
+#include <list>
+#include <iterator>
+#include "OSUFlow.h"
+#include "Lattice4D.h"
+#include "Block.h"
+
+//----------------------------------------------------------------------------
+//
+Block::Block(Lattice4D *lat, OSUFlow **osuflow, int ghost, char *filename,
+	     DataMode data_mode, char **dataset_files, int track_seed_id) {
+
+  lat4D = lat;
+  latAMR = NULL;
+  this->ghost = ghost;
+  this->osuflow = osuflow;
+  strncpy(this->filename, filename, sizeof(this->filename));
+  this->data_mode = data_mode;
+  this->dataset_files = dataset_files;
+  this->track_seed_id = track_seed_id;
+
+}
+//----------------------------------------------------------------------------
+//
+Block::Block(LatticeAMR *lat, OSUFlow **osuflow, char *filename, 
+	     DataMode data_mode, char **dataset_files, int track_seed_id) {
+
+  latAMR = lat;
+  lat4D = NULL;
+  ghost = 0;
+  this->osuflow = osuflow;
+  strncpy(this->filename, filename, sizeof(this->filename));
+  this->data_mode = data_mode;
+  this->dataset_files = dataset_files;
+  this->track_seed_id = track_seed_id;
+
+}
+//----------------------------------------------------------------------------
+//
+Block::~Block() {
+
+}
+//----------------------------------------------------------------------------
+
+#ifdef _MPI
+
+//--------------------------------------------------------------------------
+//
+// Only used if USE_IOL is defined. This function calls the iol library
+// on groups of blocks from timesteps and then returns the data in a
+// float array
+//
+float ***Block::IolLoadTimeGroupBlocks4D(int t_group) {
+
+  float size[3]; // spatial domain size
+
+  assert(lat4D != NULL);
+  size[0] =lat4D->xdim; size[1] = lat4D->ydim; size[2] = lat4D->zdim;
+
+  IOL_Block *blocks = (IOL_Block *)malloc(sizeof(IOL_Block) * lat4D->nb);
+  assert(blocks != NULL);
+  int i, j;
+  float from[3], to[3];
+  int min_t = -1, max_t = -1;
+  for (i = 0; i < lat4D->nb; i++)	{
+    if (IsBlockInTimeGroup4D(t_group, i)) {
+      lat4D->GetVB(i, from, to, &min_t, &max_t);
+      break;
+    }
+  }
+  assert(min_t != -1 && max_t != -1);
+
+  // returned time varying float data for each block
+  float ***ret_data = (float ***)malloc(sizeof(float **) * lat4D->nb);
+  assert(ret_data);
+  memset(ret_data, 0, sizeof(float ***) * lat4D->nb);
+  for (i = 0; i < lat4D->nb; i++) {
+    ret_data[i] = (float **)malloc(sizeof(float *) * (max_t - min_t + 1));
+    assert(ret_data[i] != NULL);
+    memset(ret_data[i], 0, sizeof(float *) * (max_t - min_t + 1));
+  }
+
+  int min_t2, max_t2;
+  int num_blocks = 0;
+
+  // mapping of iol blocks back to regular block numbers
+  int *iol_block_map = (int *)malloc(sizeof(int) * lat4D->nb);
+
+  for (i = min_t; i <= max_t; i++) {
+
+    num_blocks = 0;
+    for (j = 0; j < lat4D->nb; j++) {
+      if (IsBlockInTimeGroup4D(t_group, j)) {
+	lat4D->GetVB(j, from, to, &min_t2, &max_t2);
+	assert(min_t2 == min_t && max_t2 == max_t);
+	IOL_Block_init(&(blocks[num_blocks]), from[0], to[0] - from[0] + 1,
+		       from[1], to[1] - from[1] + 1, from[2], 
+		       to[2] - from[2] + 1, i, dataset_files[i]);
+	iol_block_map[num_blocks] = j;
+	num_blocks++;
+      }
+    }
+    IOL_Read(num_blocks, blocks, size[0], size[1], size[2]);
+
+    // place the pointers in their proper location for returning
+    for (j = 0; j < num_blocks; j++)
+	ret_data[iol_block_map[j]][i - min_t] = (float *)blocks[j].data;
+
+    num_blocks = 0;
+
+  }
+		
+  // go ahead and free empty blocks that will not be used
+  for (j = 0; j < num_blocks; j++) {
+    if (ret_data[j][0] == NULL) {
+      free(ret_data[j]);
+      ret_data[j] = NULL;
+    }
+  }		
+
+  free(iol_block_map);
+  free(blocks);
+
+  return ret_data;
+
+}
+//-----------------------------------------------------------------------
+
+#endif
+
+//-----------------------------------------------------------------------
+//
+// tests whether block blk is in time group grp
+//
+int Block::IsBlockInTimeGroup4D(int grp, int blk) {
+
+  int min_t, max_t; // block temporal extent
+  int ntpart; // number of time partitions
+  int tsize; // number of time steps
+
+  assert(lat4D != NULL);
+  ntpart = lat4D->tdim;
+  tsize = lat4D->ldim;
+
+  lat4D->GetTB(blk, &min_t, &max_t);
+  if (tsize == 1 || ntpart == 1 || min_t == grp * tsize / ntpart)
+    return 1;
+
+  return 0;
+
+}
+//-----------------------------------------------------------------------
+//
+// tests whether block blk is in time group grp
+//
+int Block::IsBlockInTimeGroupAMR(int grp, int blk) {
+
+  int min_t, max_t; // block temporal extent
+  int ntpart; // number of time partitions
+  int tsize; // number of time steps
+
+  assert(latAMR != NULL);
+  ntpart = latAMR->ntpart;
+  tsize = latAMR->tdim;
+
+  latAMR->GetTB(blk, &min_t, &max_t);
+  if (tsize == 1 || ntpart == 1 || min_t == grp * tsize / ntpart)
+    return 1;
+
+  return 0;
+
+}
+//-----------------------------------------------------------------------
+//
+// evicts blocks in time groups prior to the current group
+//
+// grp: current group
+//
+void Block::DeleteBlocks4D(int grp) {
+
+  int i;
+
+  assert(lat4D != NULL);
+
+  for (i = 0; i < lat4D->nb; i++) {
+
+    if (lat4D->GetLoad(i) && !IsBlockInTimeGroup4D(grp, i)) {
+      lat4D->ClearLoad(i);
+      osuflow[i]->DeleteData();
+    }
+
+  }
+
+}
+//-----------------------------------------------------------------------
+//
+// evicts blocks in time groups prior to the current group
+//
+// grp: current group
+//
+void Block::DeleteBlocksAMR(int grp) {
+
+  int i;
+
+  assert(latAMR != NULL);
+
+  for (i = 0; i < latAMR->nb; i++) {
+
+    if (latAMR->GetLoad(i) && !IsBlockInTimeGroupAMR(grp, i)) {
+      latAMR->ClearLoad(i);
+      osuflow[i]->DeleteData();
+    }
+
+  }
+
+}
+//-----------------------------------------------------------------------
+//
+// loads blocks in this time group
+//
+// grp: current group
+// time (output): the time it took to load
+// data: data that has already been read in (defaults to NULL
+//
+// returns: number of bytes actually loaded
+//
+int Block::LoadBlocks4D(int grp, double *time, float **data) {
+
+  int s = 0; // data size (bytes)
+  float from[3], to[3]; // block spatial extent
+  int min_t, max_t; // block temporal extent
+  float size[3]; // spatial domain size
+  double t0;
+  int i;
+
+  assert(lat4D != NULL);
+  size[0] =lat4D->xdim; size[1] = lat4D->ydim; size[2] = lat4D->zdim;
+
+  *time = 0.0;
+
+  for (i = 0; i < lat4D->nb; i++) {
+
+    if (!lat4D->GetLoad(i) && IsBlockInTimeGroup4D(grp, i)) {
+
+      // load the block
+      lat4D->GetVB(i, from, to, &min_t, &max_t);
+#ifdef _MPI
+      t0 = MPI_Wtime();
+#endif
+      osuflow[i]->LoadData(filename, from, to, size,
+			   min_t, max_t, data_mode, data); 
+#ifdef _MPI
+      *time += (MPI_Wtime() - t0);
+#endif
+
+      s += ((to[0] - from[0]) * (to[1] - from[1]) *
+	    (to[2] - from[2]) * 3 * sizeof(float));
+
+      lat4D->SetLoad(i);
+
+    }
+
+  }
+
+  return s;
+
+}
+//-----------------------------------------------------------------------
+//
+// loads a new block
+//
+// grp: current group
+// blk: desired block
+// time (output): the time it took to load
+// data: data that has already been read in (defaults to NULL
+//
+// returns: number of bytes actually loaded
+// 0 if the block is already in memory
+// or its temporal extent does not match the group
+//
+int Block::LoadBlock4D(int grp, int blk, double *time, float **data) {
+
+  int s = 0; // data size (bytes)
+  float from[3], to[3]; // block spatial extent
+  int min_t, max_t; // block temporal extent
+  float size[3]; // spatial domain size
+
+  assert(lat4D != NULL);
+  size[0] =lat4D->xdim; size[1] = lat4D->ydim; size[2] = lat4D->zdim;
+
+  if (!lat4D->GetLoad(blk) && IsBlockInTimeGroup4D(grp, blk)) {
+
+    // load the block
+    lat4D->GetVB(blk, from, to, &min_t, &max_t);
+#ifdef _MPI
+    *time = MPI_Wtime();
+#endif
+    osuflow[blk]->LoadData(filename, from, to, size,
+			   min_t, max_t, data_mode, data); 
+#ifdef _MPI
+    *time = (MPI_Wtime() - *time);
+#endif
+
+    s = ((to[0] - from[0]) * (to[1] - from[1]) *
+	 (to[2] - from[2]) * 3 * sizeof(float));
+
+    lat4D->SetLoad(blk);
+
+  }
+
+  return s;
+
+}
+//-----------------------------------------------------------------------
+//
+// loads blocks in this time group
+//
+// grp: current group
+// time (output): the time it took to load
+//
+// returns: number of bytes actually loaded
+//
+int Block::LoadBlocksAMR(int grp, double *time) {
+
+  int s = 0; // data size (bytes)
+  float from[3], to[3]; // block spatial extent
+  int min_t, max_t; // time group extent
+  int i;
+  float **data;
+  int ntpart; // number of time partitions
+  int tsize; // total number of timesteps
+  int dims[3]; // block size (eg. 16x16x16)
+
+  assert(latAMR != NULL);
+  ntpart = latAMR->ntpart;
+  tsize = latAMR->tdim;
+  latAMR->GetBlockDims(dims);
+
+  min_t = grp * tsize / ntpart;
+  max_t = (grp == ntpart - 1 ? tsize - 1 : (grp + 1) * tsize / ntpart);
+
+#ifdef _MPI
+  *time = MPI_Wtime();
+#endif
+
+  for (i = min_t; i <= max_t; i++) // all time steps in the time group
+    latAMR->LoadData(filename, i);
+
+#ifdef _MPI
+  *time  = MPI_Wtime() - *time;
+#endif
+
+  for (i = 0; i < latAMR->nb; i++ ) {
+
+    if (!latAMR->GetLoad(i) && IsBlockInTimeGroupAMR(grp, i)) {
+
+      // create time varying flow field for this block
+      latAMR->GetVB(i, from, to, &min_t, &max_t);
+      data = latAMR->GetData(i);
+      osuflow[i]->CreateTimeVaryingFlowField(data, dims[0], dims[1], 
+					     dims[2], from, to, 
+					     min_t, max_t); 
+      s += ((to[0] - from[0]) * (to[1] - from[1]) *
+	    (to[2] - from[2]) * 3 * sizeof(float));
+      latAMR->SetLoad(i);
+
+    }
+
+  }
+
+  return s;
+
+}
+//-----------------------------------------------------------------------
+//
+// initializes blocks and seeds them
+//
+void Block::InitBlocks4D(VECTOR4 **Seeds, int *NumSeeds, int *SizeSeeds, 
+			 VECTOR3 *seeds, int tf, int64_t **SeedIds) {
+
+  int i, j;
+  float from[3], to[3]; // block spatial extent
+  int min_t, max_t; // block temporal extent
+
+  assert(lat4D != NULL);
+
+  // init all blocks
+  for (i = 0; i < lat4D->nb; i++) {
+
+    NumSeeds[i] = 0;
+    lat4D->ClearLoad(i);
+
+    // init seeds for blocks in first time group
+    if (IsBlockInTimeGroup4D(0, i)) {
+
+      lat4D->GetVB(i, from, to, &min_t, &max_t);
+      osuflow[i]->SetRandomSeedPoints(from, to, tf); 
+      seeds = osuflow[i]->GetSeeds(NumSeeds[i]); 
+
+      while (SizeSeeds[i] < NumSeeds[i] * sizeof(VECTOR4)) {
+	Seeds[i] = (VECTOR4 *)realloc(Seeds[i], SizeSeeds[i] * 2);
+	assert(Seeds[i] != NULL);
+
+	if (track_seed_id) {
+	  SeedIds[i] = (int64_t *)realloc(SeedIds[i], SizeSeeds[i] * 2);
+	  assert(SeedIds[i] != NULL);
+	}
+
+	SizeSeeds[i] *= 2;
+      }
+
+      for (j = 0; j < NumSeeds[i]; j++)
+	Seeds[i][j].Set(seeds[j][0], seeds[j][1], seeds[j][2], min_t);
+    }
+
+  }
+
+  if (track_seed_id) {
+
+    int64_t my_num_seeds = 0;
+    for (i = 0; i < lat4D->nb; i++) 
+      my_num_seeds += NumSeeds[i];
+    int64_t my_seed_id_start = 0;
+
+#ifdef _MPI
+    MPI_Exscan(&my_num_seeds, &my_seed_id_start, 1, MPI_LONG_LONG, MPI_SUM,
+	       MPI_COMM_WORLD);
+#endif
+
+    int64_t seed_id = my_seed_id_start;
+    for (i = 0; i < lat4D->nb; i++) 
+      for (j = 0; j < NumSeeds[i]; j++, seed_id++)
+	SeedIds[i][j] = seed_id;
+
+  }
+
+}
+//-----------------------------------------------------------------------
+//
+// initializes blocks and seeds them
+//
+void Block::InitBlocksAMR(VECTOR4 **Seeds, int *NumSeeds, int *SizeSeeds, 
+			  VECTOR3 *seeds, int tf, int64_t **SeedIds) {
+
+  int i, j;
+  float from[3], to[3]; // block spatial extent
+  int min_t, max_t; // block temporal extent
+
+  assert(latAMR != NULL);
+
+  // init all blocks
+  for (i = 0; i < latAMR->nb; i++) {
+
+    NumSeeds[i] = 0;
+    latAMR->ClearLoad(i);
+
+    // init seeds for blocks in first time group
+    if (IsBlockInTimeGroupAMR(0, i)) {
+
+      latAMR->GetVB(i, from, to, &min_t, &max_t);
+      osuflow[i]->SetRandomSeedPoints(from, to, tf); 
+      seeds = osuflow[i]->GetSeeds(NumSeeds[i]); 
+
+      while (SizeSeeds[i] < NumSeeds[i] * sizeof(VECTOR4)) {
+	Seeds[i] = (VECTOR4 *)realloc(Seeds[i], SizeSeeds[i] * 2);
+	assert(Seeds[i] != NULL);
+	SizeSeeds[i] *= 2;
+      }
+
+      for (j = 0; j < NumSeeds[i]; j++)
+	Seeds[i][j].Set(seeds[j][0], seeds[j][1], seeds[j][2], min_t);
+
+    }
+
+  }
+
+}
+//-----------------------------------------------------------------------
