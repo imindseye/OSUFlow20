@@ -5,6 +5,7 @@
 //                 The Ohio State University	
 //                 Date:		06/2005
 //                 Vector Field: 3D Static or Time-Varying
+//				Commit to githib  0702/20
 //
 ///////////////////////////////////////////////////////////////////////////////
 
